@@ -833,16 +833,20 @@ When called from a mouse EVENT, point is first moved to the click."
   'asciidoc)
 
 (defun asciidoc--xref-id-at-point ()
-  "Return the cross-reference id under point, or nil."
+  "Return the cross-reference id under point, or nil.
+Recognized at a `<<id>>' or `xref:id[]' reference, or at an `[[id]]' /
+`[#id]' anchor (so xref commands work from the definition too)."
   (let* ((leaf (treesit-node-at (point) 'asciidoc-inline))
          (node (and leaf
                     (treesit-parent-until
                      leaf
                      (lambda (n)
-                       (member (treesit-node-type n) '("xref" "inline_macro")))
+                       (member (treesit-node-type n)
+                               '("xref" "inline_macro" "id_assignment")))
                      t))))
     (pcase (and node (treesit-node-type node))
       ("xref" (asciidoc--node-field node "id"))
+      ("id_assignment" (asciidoc--node-field node "id"))
       ("inline_macro"
        (when (equal (asciidoc--node-field node "macro_name") "xref")
          (asciidoc--node-field node "target"))))))
@@ -867,21 +871,90 @@ and section titles (for natural cross references like `<<My Title>>')."
             (push title ids)))))
     (delete-dups (nreverse ids))))
 
-(defun asciidoc--xref-capf ()
-  "Completion-at-point for cross-reference ids inside `<<...>>'.
-Offers the buffer's anchor ids and section titles.  Returns nil unless
-point is in the id portion of an open `<<' reference (before any `,'
-reftext separator or closing `>')."
+(defconst asciidoc--builtin-attributes
+  '("doctitle" "author" "authorinitials" "firstname" "lastname" "email"
+    "revnumber" "revdate" "revremark" "version" "doctype" "backend"
+    "sectnums" "sectanchors" "toc" "toclevels" "icons" "imagesdir"
+    "source-highlighter" "experimental" "idprefix" "idseparator"
+    "nofooter" "stem" "tabsize" "leveloffset"
+    ;; character-replacement intrinsics
+    "sp" "nbsp" "zwsp" "wj" "apos" "quot" "lsquo" "rsquo" "ldquo" "rdquo"
+    "deg" "plus" "brvbar" "vbar" "amp" "lt" "gt" "startsb" "endsb"
+    "caret" "asterisk" "tilde" "backslash" "backtick" "two-colons"
+    "two-semicolons" "cpp" "pp" "blank" "empty")
+  "Common built-in document attribute names offered for completion.")
+
+(defconst asciidoc--common-source-languages
+  '("asciidoc" "bash" "c" "clojure" "cpp" "csharp" "css" "diff" "dockerfile"
+    "elixir" "emacs-lisp" "erlang" "go" "groovy" "haskell" "html" "java"
+    "javascript" "json" "kotlin" "lisp" "lua" "make" "markdown" "ocaml"
+    "perl" "php" "python" "ruby" "rust" "scala" "scheme" "sh" "shell" "sql"
+    "swift" "toml" "typescript" "xml" "yaml")
+  "Common source-block language names offered for completion.")
+
+(defun asciidoc--attribute-names ()
+  "Return attribute names for completion.
+Combines the attributes defined in the buffer with the built-in set."
+  (let (names)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward "^:\\([a-zA-Z0-9_][a-zA-Z0-9_-]*\\):" nil t)
+        (push (match-string-no-properties 1) names)))
+    (delete-dups (append (nreverse names) asciidoc--builtin-attributes))))
+
+(defun asciidoc--source-languages ()
+  "Return source-block language names for completion."
+  (delete-dups (append (mapcar #'car asciidoc-code-lang-modes)
+                       asciidoc--common-source-languages)))
+
+(defun asciidoc--capf-bounded (opener forbidden table)
+  "Return a capf for completion after OPENER up to point.
+Search back to OPENER on the current line; return nil when the text
+between it and point contains any FORBIDDEN character.  TABLE is the
+completion collection."
   (save-excursion
     (let ((end (point)))
-      (when (re-search-backward "<<" (line-beginning-position) t)
+      (when (re-search-backward opener (line-beginning-position) t)
         (let ((start (match-end 0)))
-          (unless (string-match-p
-                   "[>,]" (buffer-substring-no-properties start end))
-            (list start end
-                  (completion-table-dynamic
-                   (lambda (_) (asciidoc--all-anchor-ids)))
-                  :exclusive 'no)))))))
+          (unless (string-match-p forbidden
+                                  (buffer-substring-no-properties start end))
+            (list start end table :exclusive 'no)))))))
+
+(defun asciidoc--capf-xref ()
+  "Complete cross-reference ids inside `<<...>>' or `xref:...['."
+  (or (asciidoc--capf-bounded
+       "<<" "[>,]"
+       (completion-table-dynamic (lambda (_) (asciidoc--all-anchor-ids))))
+      (asciidoc--capf-bounded
+       "xref:" "[],]"
+       (completion-table-dynamic (lambda (_) (asciidoc--all-anchor-ids))))))
+
+(defun asciidoc--capf-attribute ()
+  "Complete attribute names inside `{...}'."
+  (asciidoc--capf-bounded
+   "{" "[}[:space:]]"
+   (completion-table-dynamic (lambda (_) (asciidoc--attribute-names)))))
+
+(defun asciidoc--capf-source-language ()
+  "Complete the language in a `[source,LANG]' block-attribute line."
+  (asciidoc--capf-bounded
+   "\\[source,[ \t]*" "[],]"
+   (completion-table-dynamic (lambda (_) (asciidoc--source-languages)))))
+
+(defun asciidoc--capf-include ()
+  "Complete the file path in an `include::PATH' directive."
+  (when buffer-file-name
+    (asciidoc--capf-bounded "include::" "\\[" #'completion-file-name-table)))
+
+(defun asciidoc--capf ()
+  "Context-aware `completion-at-point' for `asciidoc-mode'.
+Completes cross-reference ids in `<<'/`xref:', attribute names in `{',
+source-block languages after `[source,', and file paths after
+`include::'.  Stays out of the way in ordinary prose."
+  (or (asciidoc--capf-xref)
+      (asciidoc--capf-attribute)
+      (asciidoc--capf-source-language)
+      (asciidoc--capf-include)))
 
 (cl-defmethod xref-backend-identifier-at-point ((_backend (eql asciidoc)))
   "Return the cross-reference id at point for the `asciidoc' backend."
@@ -898,6 +971,27 @@ ID may be an in-buffer id/title or a cross-document `path#fragment'."
   (when-let* ((marker (asciidoc--resolve-reference id)))
     (list (xref-make id (xref-make-buffer-location
                          (marker-buffer marker) (marker-position marker))))))
+
+(defun asciidoc--xref-item-at (pos)
+  "Return an `xref-item' for the reference at POS, summarized by its line."
+  (save-excursion
+    (goto-char pos)
+    (xref-make (buffer-substring-no-properties
+                (line-beginning-position) (line-end-position))
+               (xref-make-buffer-location (current-buffer) pos))))
+
+(cl-defmethod xref-backend-references ((_backend (eql asciidoc)) id)
+  "Return `<<id>>' and `xref:id[]' usages of ID as `xref' items.
+References are resolved within the current buffer."
+  (let ((q (regexp-quote id)) items)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward (concat "<<" q "\\(?:,[^>]*\\)?>>") nil t)
+        (push (asciidoc--xref-item-at (match-beginning 0)) items))
+      (goto-char (point-min))
+      (while (re-search-forward (concat "xref:" q "\\(?:#[^[]*\\)?\\[") nil t)
+        (push (asciidoc--xref-item-at (match-beginning 0)) items)))
+    (nreverse items)))
 
 ;;; Flyspell
 
@@ -1009,7 +1103,7 @@ Install them with \\[asciidoc-install-grammars].
     ;; Cross-reference navigation via `xref' (M-. / M-,).
     (add-hook 'xref-backend-functions #'asciidoc--xref-backend nil t)
     ;; Complete cross-reference ids while typing `<<'.
-    (add-hook 'completion-at-point-functions #'asciidoc--xref-capf nil t)
+    (add-hook 'completion-at-point-functions #'asciidoc--capf nil t)
 
     (treesit-major-mode-setup)
 

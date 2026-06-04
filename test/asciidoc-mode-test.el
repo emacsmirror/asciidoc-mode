@@ -725,7 +725,22 @@
     (with-fontified-asciidoc-buffer "= D\n\n== Intro\n\n[[boom]] x\n"
       (let ((ids (xref-backend-identifier-completion-table 'asciidoc)))
         (expect (member "boom" ids) :to-be-truthy)
-        (expect (member "_intro" ids) :to-be-truthy)))))
+        (expect (member "_intro" ids) :to-be-truthy))))
+
+  (it "finds <<id>> and xref:id[] references to an anchor"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer
+        "[[foo]] def.\n\nSee <<foo>>, xref:foo[here], and <<foo,cap>>.\n"
+      (expect (length (xref-backend-references 'asciidoc "foo")) :to-equal 3)))
+
+  (it "reports the anchor id at point on a definition"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "[[my-anchor]] here.\n"
+      (goto-char (point-min))
+      (search-forward "my-anchor")
+      (backward-char)
+      (expect (xref-backend-identifier-at-point 'asciidoc)
+              :to-equal "my-anchor"))))
 
 ;;; Cross-reference completion
 
@@ -734,37 +749,62 @@
     (with-temp-buffer
       (insert "== My Section\n\n[[explicit]] x\n\nSee <<")
       (goto-char (point-max))
-      (let* ((cap (asciidoc--xref-capf))
+      (let* ((cap (asciidoc--capf))
              (cands (all-completions "" (nth 2 cap))))
         (expect (member "explicit" cands) :to-be-truthy)
         (expect (member "_my_section" cands) :to-be-truthy)
         (expect (member "My Section" cands) :to-be-truthy))))
 
+  (it "completes ids inside `xref:'"
+    (with-temp-buffer
+      (insert "[[explicit]] x\n\nSee xref:")
+      (goto-char (point-max))
+      (let* ((cap (asciidoc--capf))
+             (cands (all-completions "" (nth 2 cap))))
+        (expect (member "explicit" cands) :to-be-truthy))))
+
   (it "bounds completion to the id text after `<<'"
     (with-temp-buffer
       (insert "See <<my-i")
       (goto-char (point-max))
-      (let ((cap (asciidoc--xref-capf)))
+      (let ((cap (asciidoc--capf)))
         (expect (buffer-substring-no-properties (nth 0 cap) (nth 1 cap))
                 :to-equal "my-i"))))
+
+  (it "completes attribute names inside `{'"
+    (with-temp-buffer
+      (insert ":custom-attr: v\n\nSee {cu")
+      (goto-char (point-max))
+      (let* ((cap (asciidoc--capf))
+             (cands (all-completions "" (nth 2 cap))))
+        (expect (member "custom-attr" cands) :to-be-truthy)
+        (expect (member "doctitle" cands) :to-be-truthy))))
+
+  (it "completes the language after `[source,'"
+    (with-temp-buffer
+      (insert "[source,ru")
+      (goto-char (point-max))
+      (let* ((cap (asciidoc--capf))
+             (cands (all-completions "" (nth 2 cap))))
+        (expect (member "ruby" cands) :to-be-truthy))))
 
   (it "does not complete in the reftext after a comma"
     (with-temp-buffer
       (insert "See <<id,the te")
       (goto-char (point-max))
-      (expect (asciidoc--xref-capf) :to-be nil)))
+      (expect (asciidoc--capf) :to-be nil)))
 
   (it "does not complete outside a cross reference"
     (with-temp-buffer
       (insert "just some text here")
       (goto-char (point-max))
-      (expect (asciidoc--xref-capf) :to-be nil)))
+      (expect (asciidoc--capf) :to-be nil)))
 
   (it "does not complete after the reference is closed"
     (with-temp-buffer
       (insert "See <<id>> and ")
       (goto-char (point-max))
-      (expect (asciidoc--xref-capf) :to-be nil))))
+      (expect (asciidoc--capf) :to-be nil))))
 
 ;;; Cross-file references
 
