@@ -193,7 +193,38 @@ Each entry has the form (LANG URL REVISION SOURCE-DIR CC C++).")
   "Face for subscript text (e.g. ~text~)."
   :group 'asciidoc)
 
+(defcustom asciidoc-superscript-raise 0.4
+  "How far to raise superscript text, as a fraction of line height.
+Applied as a `display' \\='(raise ...) property on top of
+`asciidoc-superscript-face'."
+  :type 'number
+  :group 'asciidoc)
+
+(defcustom asciidoc-subscript-raise -0.25
+  "How far to lower subscript text, as a fraction of line height.
+Applied as a `display' \\='(raise ...) property on top of
+`asciidoc-subscript-face'."
+  :type 'number
+  :group 'asciidoc)
+
 ;;; Font-lock
+
+(defun asciidoc--fontify-raised-span (node override start end &rest _)
+  "Fontify a `superscript'/`subscript' NODE: face it and raise or lower it.
+The single-character `^'/`~' delimiters are left on the baseline; only the
+inner content is shifted via a `display' \\='(raise ...) property.  START and
+END bound the region being fontified; OVERRIDE is passed through from the
+font-lock rule."
+  (let* ((subp (equal (treesit-node-type node) "subscript"))
+         (face (if subp 'asciidoc-subscript-face 'asciidoc-superscript-face))
+         (raise (if subp asciidoc-subscript-raise asciidoc-superscript-raise))
+         ;; The node spans the whole `^x^'/`~x~'; skip the one-character
+         ;; opening and closing delimiters so only the content floats.
+         (beg (max start (1+ (treesit-node-start node))))
+         (fin (min end (1- (treesit-node-end node)))))
+    (when (< beg fin)
+      (treesit-fontify-with-override beg fin face override)
+      (put-text-property beg fin 'display (list 'raise raise)))))
 
 (defvar asciidoc--font-lock-settings
   (treesit-font-lock-rules
@@ -286,8 +317,8 @@ Each entry has the form (LANG URL REVISION SOURCE-DIR CC C++).")
      (ltalic) @italic
      (monospace) @font-lock-string-face
      (highlight) @font-lock-warning-face
-     (superscript) @asciidoc-superscript-face
-     (subscript) @asciidoc-subscript-face
+     (superscript) @asciidoc--fontify-raised-span
+     (subscript) @asciidoc--fontify-raised-span
      (passthrough) @font-lock-string-face)
 
    :language 'asciidoc-inline
@@ -576,6 +607,11 @@ Install them with \\[asciidoc-install-grammars].
     (setq-local treesit-font-lock-settings asciidoc--font-lock-settings)
     (setq-local treesit-font-lock-feature-list
                 asciidoc--treesit-font-lock-feature-list)
+    ;; The super/subscript rules attach a `display' \='(raise ...) property;
+    ;; let font-lock clear it on refontification so an edited span does not
+    ;; leave its content permanently floating.
+    (setq-local font-lock-extra-managed-props
+                (cons 'display font-lock-extra-managed-props))
 
     ;; Imenu
     (setq-local treesit-simple-imenu-settings

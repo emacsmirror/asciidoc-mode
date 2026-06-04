@@ -142,19 +142,30 @@
         (expect (asciidoc-test-face-at (+ (point-min) pos))
                 :to-equal 'font-lock-string-face))))
 
-  (it "fontifies superscript text"
+  (it "fontifies superscript text and raises it"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "E = mc^2^ today\n"
-      (let ((pos (string-match "2" "E = mc^2^ today")))
-        (expect (asciidoc-test-face-at (+ (point-min) pos))
-                :to-equal 'asciidoc-superscript-face))))
+      (let ((pos (+ (point-min) (string-match "2" "E = mc^2^ today"))))
+        (expect (asciidoc-test-face-at pos)
+                :to-equal 'asciidoc-superscript-face)
+        (expect (get-text-property pos 'display)
+                :to-equal (list 'raise asciidoc-superscript-raise)))))
 
-  (it "fontifies subscript text"
+  (it "fontifies subscript text and lowers it"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "H~2~O is water\n"
-      (let ((pos (string-match "2" "H~2~O is water")))
-        (expect (asciidoc-test-face-at (+ (point-min) pos))
-                :to-equal 'asciidoc-subscript-face))))
+      (let ((pos (+ (point-min) (string-match "2" "H~2~O is water"))))
+        (expect (asciidoc-test-face-at pos)
+                :to-equal 'asciidoc-subscript-face)
+        (expect (get-text-property pos 'display)
+                :to-equal (list 'raise asciidoc-subscript-raise)))))
+
+  (it "leaves the superscript delimiters on the baseline"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "E = mc^2^ today\n"
+      ;; the opening `^' must not carry the raise display property
+      (let ((caret (+ (point-min) (string-match "\\^2" "E = mc^2^ today"))))
+        (expect (get-text-property caret 'display) :to-be nil))))
 
   (it "fontifies autolinks"
     (assume asciidoc-test-grammars-available skip-reason)
