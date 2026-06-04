@@ -435,6 +435,10 @@
     (let ((asciidoc-code-lang-modes nil))
       (expect (asciidoc--code-block-lang-mode "emacs-lisp")
               :to-equal 'emacs-lisp-mode)))
+  (it "resolves json to an available json mode"
+    (expect (memq (asciidoc--code-block-lang-mode "json")
+                  '(js-json-mode json-ts-mode json-mode))
+            :to-be-truthy))
   (it "returns nil when no candidate is available"
     (let ((asciidoc-code-lang-modes '(("foo" . (asciidoc-no-such-mode)))))
       (expect (asciidoc--code-block-lang-mode "foo") :to-be nil))))

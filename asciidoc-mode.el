@@ -82,6 +82,7 @@ blocks."
     ("bash" . sh-mode)
     ("shell" . sh-mode)
     ("elisp" . emacs-lisp-mode)
+    ("json" . (js-json-mode json-ts-mode json-mode))
     ("ocaml" . (neocaml-mode tuareg-mode caml-mode))
     ("sqlite" . sql-mode))
   "Alist mapping AsciiDoc source languages to major modes.
