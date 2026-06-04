@@ -597,6 +597,15 @@
           (asciidoc-follow-reference-at-point)
           (expect followed :to-equal "https://example.com")))))
 
+  (it "follows a cross-reference to a section by its auto-id"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer
+        "= D\n\n== Getting Started\n\nSee <<_getting_started>>.\n"
+      (re-search-forward "<<_")
+      (backward-char)
+      (asciidoc-follow-reference-at-point)
+      (expect (looking-at "== Getting Started") :to-be-truthy)))
+
   (it "errors when a cross-reference has no anchor"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "See <<missing>> here.\n"
@@ -610,6 +619,73 @@
       (let ((pos (+ (point-min) (string-match "<<target" (buffer-string)))))
         (expect (get-text-property pos 'keymap)
                 :to-equal asciidoc-reference-map)))))
+
+;;; Section id generation
+
+(describe "Section id generation"
+  (it "matches Asciidoctor's default algorithm"
+    (with-temp-buffer
+      (expect (asciidoc--section-id "Introduction to AsciiDoc")
+              :to-equal "_introduction_to_asciidoc")
+      (expect (asciidoc--section-id "What's New?") :to-equal "_what_s_new")
+      (expect (asciidoc--section-id "Section 1.2") :to-equal "_section_1_2")))
+
+  (it "honors a custom idseparator"
+    (with-temp-buffer
+      (insert ":idseparator: -\n")
+      (expect (asciidoc--section-id "Hello World") :to-equal "_hello-world")))
+
+  (it "honors a custom idprefix"
+    (with-temp-buffer
+      (insert ":idprefix: sect_\n")
+      (expect (asciidoc--section-id "Goals") :to-equal "sect_goals"))))
+
+;;; Xref backend
+
+(describe "Xref backend"
+  :var (skip-reason)
+  (before-all
+    (unless asciidoc-test-grammars-available
+      (setq skip-reason "tree-sitter grammars not installed")))
+
+  (it "reports the cross-reference id at point"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "See <<my-id>> now.\n"
+      (re-search-forward "<<m")
+      (backward-char)
+      (expect (xref-backend-identifier-at-point 'asciidoc) :to-equal "my-id")))
+
+  (it "reports the id of an xref macro at point"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "See xref:my-id[text].\n"
+      (re-search-forward "xref:m")
+      (backward-char)
+      (expect (xref-backend-identifier-at-point 'asciidoc) :to-equal "my-id")))
+
+  (it "resolves a definition to its explicit anchor"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "[[my-id]] here.\n\nSee <<my-id>>.\n"
+      (let* ((defs (xref-backend-definitions 'asciidoc "my-id"))
+             (loc (xref-item-location (car defs))))
+        (expect (length defs) :to-equal 1)
+        (goto-char (marker-position (xref-location-marker loc)))
+        (expect (looking-at "\\[\\[my-id\\]\\]") :to-be-truthy))))
+
+  (it "resolves a definition to a section by auto-id"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer
+        "= D\n\n== Getting Started\n\nSee <<_getting_started>>.\n"
+      (let* ((defs (xref-backend-definitions 'asciidoc "_getting_started"))
+             (loc (xref-item-location (car defs))))
+        (goto-char (marker-position (xref-location-marker loc)))
+        (expect (looking-at "== Getting Started") :to-be-truthy))))
+
+  (it "offers explicit and section ids for completion"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "= D\n\n== Intro\n\n[[boom]] x\n"
+      (let ((ids (xref-backend-identifier-completion-table 'asciidoc)))
+        (expect (member "boom" ids) :to-be-truthy)
+        (expect (member "_intro" ids) :to-be-truthy)))))
 
 ;;; Filling
 

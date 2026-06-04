@@ -39,7 +39,7 @@
 ;;   attributes, admonitions, macros, and more
 ;; - Imenu support for section navigation
 ;; - Outline integration for folding
-;; - Clickable cross-references and links (RET, mouse, or C-c C-o)
+;; - Cross-reference and link navigation (RET, mouse, C-c C-o, or xref)
 ;; - Comment support (// line comments)
 ;;
 ;; Quick start:
@@ -51,6 +51,8 @@
 (require 'treesit)
 (require 'subr-x)
 (require 'outline)
+(require 'xref)
+(require 'cl-lib)
 
 ;;; Customization
 
@@ -589,21 +591,60 @@ Group 1 is the run of leading `=' markers.")
                            t))))
     (treesit-node-text child t)))
 
-(defun asciidoc--anchor-position (id)
-  "Return the buffer position of the anchor defining ID, or nil.
-Only explicit anchors are matched: the inline forms `[[ID]]' and
-`[[ID,reftext]]', and the shorthand `[#ID]' (optionally with roles, as in
-`[#ID.role]').  Auto-generated section ids are not resolved yet."
+(defun asciidoc--doc-attribute (name default)
+  "Return document attribute NAME (a `:name: value' line) or DEFAULT.
+An attribute set to an empty value yields an empty string, not DEFAULT."
+  (save-excursion
+    (goto-char (point-min))
+    (if (re-search-forward
+         (concat "^:" (regexp-quote name) ":[ \t]*\\(.*\\)$") nil t)
+        (string-trim (match-string-no-properties 1))
+      default)))
+
+(defun asciidoc--section-id (title)
+  "Return the auto-generated id AsciiDoc derives from section TITLE.
+Honors the document's `idprefix' (default \"_\") and `idseparator'
+\(default \"_\"): TITLE is downcased, every run of non-alphanumeric
+characters becomes the separator, leading and trailing separators are
+trimmed, and the prefix is prepended."
+  (let* ((prefix (asciidoc--doc-attribute "idprefix" "_"))
+         (sep (asciidoc--doc-attribute "idseparator" "_"))
+         (body (replace-regexp-in-string "[^[:alnum:]]+" sep (downcase title))))
+    (unless (string-empty-p sep)
+      (let ((q (regexp-quote sep)))
+        (setq body (replace-regexp-in-string
+                    (concat "\\`" q "+\\|" q "+\\'") "" body))))
+    (concat prefix body)))
+
+(defun asciidoc--explicit-anchor-position (id)
+  "Return the position of an explicit anchor defining ID, or nil.
+Matches the inline forms `[[ID]]' and `[[ID,reftext]]' and the shorthand
+`[#ID]' (optionally with roles, as in `[#ID.role]')."
   (let ((q (regexp-quote id)))
     (save-excursion
       (goto-char (point-min))
-      ;; Match `[[id]]', `[[id,reftext]]' and the `[#id]' / `[#id.role]'
-      ;; shorthand.
       (when (re-search-forward
              (concat "\\[\\[" q "\\(?:,[^]]*\\)?\\]\\]"
                      "\\|\\[#" q "[].]")
              nil t)
         (match-beginning 0)))))
+
+(defun asciidoc--section-anchor-position (id)
+  "Return the position of a section whose auto-generated id is ID, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (catch 'found
+      (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
+        (when (equal (asciidoc--section-id (match-string-no-properties 1)) id)
+          (throw 'found (match-beginning 0))))
+      nil)))
+
+(defun asciidoc--anchor-position (id)
+  "Return the buffer position of the anchor defining ID, or nil.
+Explicit anchors (`[[ID]]', `[#ID]') take precedence over a section whose
+auto-generated id matches ID."
+  (or (asciidoc--explicit-anchor-position id)
+      (asciidoc--section-anchor-position id)))
 
 (defun asciidoc--goto-anchor (id)
   "Move point to the anchor defining cross-reference ID.
@@ -612,6 +653,7 @@ Signal a `user-error' when no matching anchor is found."
     (unless pos
       (user-error "No anchor found for cross-reference `%s'" id))
     (push-mark)
+    (xref-push-marker-stack)
     (goto-char pos)
     (when (fboundp 'pulse-momentary-highlight-one-line)
       (pulse-momentary-highlight-one-line pos))))
@@ -649,6 +691,63 @@ When called from a mouse EVENT, point is first moved to the click."
            ("mailto" (browse-url (concat "mailto:" target)))
            (_ (user-error "Nothing to follow at point")))))
       (_ (user-error "No reference at point")))))
+
+;;; Xref backend
+
+;; Resolving an AsciiDoc cross-reference to its anchor is exactly what Emacs'
+;; `xref' framework expects, so expose it as a backend.  This gives
+;; `xref-find-definitions' (M-.) on a `<<id>>'/`xref:id[]' and `xref-go-back'
+;; (M-,) to return, with history, for free.
+
+(defun asciidoc--xref-backend ()
+  "Return the `xref' backend for `asciidoc-mode'."
+  'asciidoc)
+
+(defun asciidoc--xref-id-at-point ()
+  "Return the cross-reference id under point, or nil."
+  (let* ((leaf (treesit-node-at (point) 'asciidoc-inline))
+         (node (and leaf
+                    (treesit-parent-until
+                     leaf
+                     (lambda (n)
+                       (member (treesit-node-type n) '("xref" "inline_macro")))
+                     t))))
+    (pcase (and node (treesit-node-type node))
+      ("xref" (asciidoc--node-field node "id"))
+      ("inline_macro"
+       (when (equal (asciidoc--node-field node "macro_name") "xref")
+         (asciidoc--node-field node "target"))))))
+
+(defun asciidoc--all-anchor-ids ()
+  "Return the list of all anchor ids in the buffer.
+Includes explicit anchors (`[[id]]', `[#id]') and auto-generated section
+ids, for completion when no id is at point."
+  (let (ids)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward
+              "\\[\\[\\([^],]+\\)\\(?:,[^]]*\\)?\\]\\]\\|\\[#\\([^].]+\\)[].]"
+              nil t)
+        (push (or (match-string-no-properties 1) (match-string-no-properties 2))
+              ids))
+      (goto-char (point-min))
+      (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
+        (push (asciidoc--section-id (match-string-no-properties 1)) ids)))
+    (delete-dups (nreverse ids))))
+
+(cl-defmethod xref-backend-identifier-at-point ((_backend (eql asciidoc)))
+  "Return the cross-reference id at point for the `asciidoc' backend."
+  (asciidoc--xref-id-at-point))
+
+(cl-defmethod xref-backend-identifier-completion-table
+  ((_backend (eql asciidoc)))
+  "Return all anchor ids in the buffer for the `asciidoc' backend."
+  (asciidoc--all-anchor-ids))
+
+(cl-defmethod xref-backend-definitions ((_backend (eql asciidoc)) id)
+  "Return the definition of ID as `xref' items for the `asciidoc' backend."
+  (when-let* ((pos (asciidoc--anchor-position id)))
+    (list (xref-make id (xref-make-buffer-location (current-buffer) pos)))))
 
 ;;; Mode definition
 
@@ -732,6 +831,9 @@ Install them with \\[asciidoc-install-grammars].
 
     ;; Outline
     (setq-local treesit-outline-predicate asciidoc--outline-predicate)
+
+    ;; Cross-reference navigation via `xref' (M-. / M-,).
+    (add-hook 'xref-backend-functions #'asciidoc--xref-backend nil t)
 
     (treesit-major-mode-setup)
 
