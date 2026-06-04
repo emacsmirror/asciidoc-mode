@@ -630,13 +630,17 @@ Matches the inline forms `[[ID]]' and `[[ID,reftext]]' and the shorthand
         (match-beginning 0)))))
 
 (defun asciidoc--section-anchor-position (id)
-  "Return the position of a section whose auto-generated id is ID, or nil."
+  "Return the position of a section matching ID, or nil.
+ID matches a section by its auto-generated id or by its exact title text,
+the latter being a natural cross reference such as `<<My Section Title>>'."
   (save-excursion
     (goto-char (point-min))
     (catch 'found
       (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
-        (when (equal (asciidoc--section-id (match-string-no-properties 1)) id)
-          (throw 'found (match-beginning 0))))
+        (let ((title (match-string-no-properties 1)))
+          (when (or (equal title id)
+                    (equal (asciidoc--section-id title) id))
+            (throw 'found (match-beginning 0)))))
       nil)))
 
 (defun asciidoc--anchor-position (id)
@@ -719,9 +723,9 @@ When called from a mouse EVENT, point is first moved to the click."
          (asciidoc--node-field node "target"))))))
 
 (defun asciidoc--all-anchor-ids ()
-  "Return the list of all anchor ids in the buffer.
-Includes explicit anchors (`[[id]]', `[#id]') and auto-generated section
-ids, for completion when no id is at point."
+  "Return the list of all cross-reference targets in the buffer.
+Includes explicit anchors (`[[id]]', `[#id]'), auto-generated section ids,
+and section titles (for natural cross references like `<<My Title>>')."
   (let (ids)
     (save-excursion
       (goto-char (point-min))
@@ -732,8 +736,26 @@ ids, for completion when no id is at point."
               ids))
       (goto-char (point-min))
       (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
-        (push (asciidoc--section-id (match-string-no-properties 1)) ids)))
+        (let ((title (match-string-no-properties 1)))
+          (push (asciidoc--section-id title) ids)
+          (push title ids))))
     (delete-dups (nreverse ids))))
+
+(defun asciidoc--xref-capf ()
+  "Completion-at-point for cross-reference ids inside `<<...>>'.
+Offers the buffer's anchor ids and section titles.  Returns nil unless
+point is in the id portion of an open `<<' reference (before any `,'
+reftext separator or closing `>')."
+  (save-excursion
+    (let ((end (point)))
+      (when (re-search-backward "<<" (line-beginning-position) t)
+        (let ((start (match-end 0)))
+          (unless (string-match-p
+                   "[>,]" (buffer-substring-no-properties start end))
+            (list start end
+                  (completion-table-dynamic
+                   (lambda (_) (asciidoc--all-anchor-ids)))
+                  :exclusive 'no)))))))
 
 (cl-defmethod xref-backend-identifier-at-point ((_backend (eql asciidoc)))
   "Return the cross-reference id at point for the `asciidoc' backend."
@@ -834,6 +856,8 @@ Install them with \\[asciidoc-install-grammars].
 
     ;; Cross-reference navigation via `xref' (M-. / M-,).
     (add-hook 'xref-backend-functions #'asciidoc--xref-backend nil t)
+    ;; Complete cross-reference ids while typing `<<'.
+    (add-hook 'completion-at-point-functions #'asciidoc--xref-capf nil t)
 
     (treesit-major-mode-setup)
 

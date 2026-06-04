@@ -606,6 +606,15 @@
       (asciidoc-follow-reference-at-point)
       (expect (looking-at "== Getting Started") :to-be-truthy)))
 
+  (it "follows a natural-title cross-reference to its section"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer
+        "== Getting Started\n\nSee <<Getting Started>>.\n"
+      (re-search-forward "<<G")
+      (backward-char)
+      (asciidoc-follow-reference-at-point)
+      (expect (looking-at "== Getting Started") :to-be-truthy)))
+
   (it "errors when a cross-reference has no anchor"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "See <<missing>> here.\n"
@@ -680,12 +689,60 @@
         (goto-char (marker-position (xref-location-marker loc)))
         (expect (looking-at "== Getting Started") :to-be-truthy))))
 
+  (it "resolves a definition by section title"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer
+        "== Getting Started\n\nSee <<Getting Started>>.\n"
+      (let* ((defs (xref-backend-definitions 'asciidoc "Getting Started"))
+             (loc (xref-item-location (car defs))))
+        (goto-char (marker-position (xref-location-marker loc)))
+        (expect (looking-at "== Getting Started") :to-be-truthy))))
+
   (it "offers explicit and section ids for completion"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "= D\n\n== Intro\n\n[[boom]] x\n"
       (let ((ids (xref-backend-identifier-completion-table 'asciidoc)))
         (expect (member "boom" ids) :to-be-truthy)
         (expect (member "_intro" ids) :to-be-truthy)))))
+
+;;; Cross-reference completion
+
+(describe "Cross-reference completion"
+  (it "completes ids and titles inside `<<'"
+    (with-temp-buffer
+      (insert "== My Section\n\n[[explicit]] x\n\nSee <<")
+      (goto-char (point-max))
+      (let* ((cap (asciidoc--xref-capf))
+             (cands (all-completions "" (nth 2 cap))))
+        (expect (member "explicit" cands) :to-be-truthy)
+        (expect (member "_my_section" cands) :to-be-truthy)
+        (expect (member "My Section" cands) :to-be-truthy))))
+
+  (it "bounds completion to the id text after `<<'"
+    (with-temp-buffer
+      (insert "See <<my-i")
+      (goto-char (point-max))
+      (let ((cap (asciidoc--xref-capf)))
+        (expect (buffer-substring-no-properties (nth 0 cap) (nth 1 cap))
+                :to-equal "my-i"))))
+
+  (it "does not complete in the reftext after a comma"
+    (with-temp-buffer
+      (insert "See <<id,the te")
+      (goto-char (point-max))
+      (expect (asciidoc--xref-capf) :to-be nil)))
+
+  (it "does not complete outside a cross reference"
+    (with-temp-buffer
+      (insert "just some text here")
+      (goto-char (point-max))
+      (expect (asciidoc--xref-capf) :to-be nil)))
+
+  (it "does not complete after the reference is closed"
+    (with-temp-buffer
+      (insert "See <<id>> and ")
+      (goto-char (point-max))
+      (expect (asciidoc--xref-capf) :to-be nil))))
 
 ;;; Filling
 
