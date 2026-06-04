@@ -143,8 +143,8 @@ A comment block that should be ignored entirely.
 
 == Macros
 
-A link: https://example.com/page[the docs] and a bare URL
-https://example.com/raw and an email contact@example.com.
+See the https://example.com/page[documentation], a bare URL
+https://example.com/raw, and an email contact@example.com.
 
 An inline image image:logo.png[Logo,32,32] and a block image:
 

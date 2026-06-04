@@ -91,9 +91,9 @@
     ;; title face must not cover the `:name: value' lines below the title.
     (with-fontified-asciidoc-buffer "= Title\n:author: Jane\n\nBody.\n"
       (let ((pos (string-match ":author:" (buffer-string))))
-        ;; the attribute name is a variable, not part of the title
+        ;; the attribute name is metadata, not part of the title
         (expect (asciidoc-test-face-at (+ 1 pos 1))
-                :to-equal 'font-lock-variable-name-face)
+                :to-equal 'asciidoc-metadata-key-face)
         ;; the leading ":" delimiter is not title-faced
         (expect (asciidoc-test-face-at (1+ pos))
                 :not :to-equal 'asciidoc-document-title-face)))))
@@ -167,12 +167,30 @@
       (let ((caret (+ (point-min) (string-match "\\^2" "E = mc^2^ today"))))
         (expect (get-text-property caret 'display) :to-be nil))))
 
-  (it "fontifies autolinks"
+  (it "fontifies autolinks with the URL face"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "Visit https://example.com for details.\n"
       (let ((pos (string-match "https" "Visit https://example.com for details.")))
         (expect (asciidoc-test-face-at (+ (point-min) pos))
+                :to-equal 'asciidoc-url-face))))
+
+  (it "fontifies a link label distinctly from its URL"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "See https://example.com[the docs] now.\n"
+      (let ((url (string-match "example" (buffer-string)))
+            (label (string-match "the docs" (buffer-string))))
+        (expect (asciidoc-test-face-at (+ (point-min) url))
+                :to-equal 'asciidoc-url-face)
+        (expect (asciidoc-test-face-at (+ (point-min) label))
                 :to-equal 'asciidoc-link-face))))
+
+  (it "fontifies footnote marker and text distinctly"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "Claim footnote:[a source] here.\n"
+      (expect (asciidoc-test-face-at (+ (point-min) (string-match "footnote" (buffer-string))))
+              :to-equal 'asciidoc-footnote-marker-face)
+      (expect (asciidoc-test-face-at (+ (point-min) (string-match "a source" (buffer-string))))
+              :to-equal 'asciidoc-footnote-text-face)))
 
   (it "fontifies cross-references distinctly from links"
     (assume asciidoc-test-grammars-available skip-reason)
@@ -350,16 +368,16 @@
   (it "fontifies document attribute name"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer ":author: Someone\n"
-      ;; "author" should get variable-name face
+      ;; "author" should get the metadata-key face
       (expect (asciidoc-test-face-at 2)
-              :to-equal 'font-lock-variable-name-face)))
+              :to-equal 'asciidoc-metadata-key-face)))
 
   (it "fontifies document attribute value"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer ":author: Jane Doe\n"
       (let ((pos (string-match "Jane" (buffer-string))))
         (expect (asciidoc-test-face-at (1+ pos))
-                :to-equal 'font-lock-string-face))))
+                :to-equal 'asciidoc-metadata-value-face))))
 
   (it "highlights inline attribute references"
     (assume asciidoc-test-grammars-available skip-reason)

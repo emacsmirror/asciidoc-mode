@@ -198,6 +198,32 @@ Each entry has the form (LANG URL REVISION SOURCE-DIR CC C++).")
   "Face for subscript text (e.g. ~text~)."
   :group 'asciidoc)
 
+(defface asciidoc-url-face
+  '((t :inherit font-lock-string-face))
+  "Face for URL and email targets (autolinks and standalone addresses).
+Link text inside `[...]' uses `asciidoc-link-face' instead."
+  :group 'asciidoc)
+
+(defface asciidoc-metadata-key-face
+  '((t :inherit font-lock-variable-name-face))
+  "Face for document attribute names (the `author' in `:author: Jane')."
+  :group 'asciidoc)
+
+(defface asciidoc-metadata-value-face
+  '((t :inherit font-lock-string-face))
+  "Face for document attribute values (the `Jane' in `:author: Jane')."
+  :group 'asciidoc)
+
+(defface asciidoc-footnote-marker-face
+  '((t :inherit font-lock-function-call-face))
+  "Face for the `footnote'/`footnoteref' macro name."
+  :group 'asciidoc)
+
+(defface asciidoc-footnote-text-face
+  '((t :inherit font-lock-doc-face))
+  "Face for footnote body text."
+  :group 'asciidoc)
+
 (defcustom asciidoc-superscript-raise 0.4
   "How far to raise superscript text, as a fraction of line height.
 Applied as a `display' \\='(raise ...) property on top of
@@ -323,8 +349,8 @@ faces are applied by their own rules.  Non-navigable inline macros (e.g.
    :language 'asciidoc
    :override t
    :feature 'attribute
-   '((document_attr (attr_name) @font-lock-variable-name-face)
-     (document_attr (line) @font-lock-string-face)
+   '((document_attr (attr_name) @asciidoc-metadata-key-face)
+     (document_attr (line) @asciidoc-metadata-value-face)
      (element_attr) @font-lock-preprocessor-face)
 
    :language 'asciidoc
@@ -352,8 +378,9 @@ faces are applied by their own rules.  Non-navigable inline macros (e.g.
 
    :language 'asciidoc-inline
    :feature 'inline-link
-   '((autolink) @asciidoc-link-face
-     (autolink) @asciidoc--fontify-reference
+   '((autolink) @asciidoc--fontify-reference
+     (link_url) @asciidoc-url-face
+     (email) @asciidoc-url-face
      (xref) @asciidoc-cross-reference-face
      (xref) @asciidoc--fontify-reference
      (uri_label) @asciidoc-link-face)
@@ -364,7 +391,8 @@ faces are applied by their own rules.  Non-navigable inline macros (e.g.
      (inline_macro (target) @font-lock-string-face)
      (inline_macro) @asciidoc--fontify-reference
      (stem_macro) @font-lock-function-call-face
-     (footnote) @font-lock-doc-face)
+     (footnote (macro_name) @asciidoc-footnote-marker-face)
+     (footnote (attr) @asciidoc-footnote-text-face))
 
    :language 'asciidoc-inline
    :feature 'inline-reference
