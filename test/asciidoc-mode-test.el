@@ -748,6 +748,88 @@
       (goto-char (point-max))
       (expect (asciidoc--xref-capf) :to-be nil))))
 
+;;; Cross-file references
+
+(describe "Cross-file references (Antora)"
+  :var (root pages skip-reason)
+  (before-all
+    (unless asciidoc-test-grammars-available
+      (setq skip-reason "tree-sitter grammars not installed")))
+  (before-each
+    (setq root (make-temp-file "asciidoc-antora" t))
+    (setq pages (expand-file-name "modules/ROOT/pages" root))
+    (make-directory (expand-file-name "basics" pages) t)
+    (with-temp-file (expand-file-name "antora.yml" root)
+      (insert "name: cider\nversion: ~\n"))
+    (with-temp-file (expand-file-name "basics/install.adoc" pages)
+      (insert "= Install\n\n== Setup Steps\n\ncontent\n"))
+    (with-temp-file (expand-file-name "usage.adoc" pages)
+      (insert "= Usage\n\nSee xref:basics/install.adoc#setup-steps[here].\n")))
+  (after-each
+    (dolist (b (buffer-list))
+      (when (and (buffer-file-name b) (string-prefix-p root (buffer-file-name b)))
+        (kill-buffer b)))
+    (delete-directory root t))
+
+  (it "detects the Antora context"
+    (with-current-buffer (find-file-noselect (expand-file-name "usage.adoc" pages))
+      (let ((ctx (asciidoc--antora-context)))
+        (expect (plist-get ctx :module) :to-equal "ROOT")
+        (expect (plist-get ctx :component) :to-equal "cider"))))
+
+  (it "resolves a page fragment using Antora id rules"
+    (with-current-buffer (find-file-noselect (expand-file-name "usage.adoc" pages))
+      (let ((m (asciidoc--resolve-reference "basics/install.adoc#setup-steps")))
+        (expect (file-name-nondirectory (buffer-file-name (marker-buffer m)))
+                :to-equal "install.adoc")
+        (with-current-buffer (marker-buffer m)
+          (goto-char m)
+          (expect (looking-at "== Setup Steps") :to-be-truthy)))))
+
+  (it "resolves a bare page to the top of the file"
+    (with-current-buffer (find-file-noselect (expand-file-name "usage.adoc" pages))
+      (let ((m (asciidoc--resolve-reference "basics/install.adoc")))
+        (expect (marker-position m) :to-equal 1)
+        (expect (file-name-nondirectory (buffer-file-name (marker-buffer m)))
+                :to-equal "install.adoc"))))
+
+  (it "returns nil for a missing target file"
+    (with-current-buffer (find-file-noselect (expand-file-name "usage.adoc" pages))
+      (expect (asciidoc--resolve-reference "basics/nope.adoc#x") :to-be nil)))
+
+  (it "opens the target file when following a cross-file xref"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-current-buffer (find-file-noselect (expand-file-name "usage.adoc" pages))
+      (font-lock-ensure)
+      (goto-char (point-min))
+      (re-search-forward "install.adoc#s")
+      (backward-char)
+      (asciidoc-follow-reference-at-point)
+      (expect (get-file-buffer (expand-file-name "basics/install.adoc" pages))
+              :to-be-truthy))))
+
+(describe "Cross-file references (generic)"
+  (it "resolves a relative path against the current file's directory"
+    (let ((root (make-temp-file "asciidoc-generic" t)))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name "sub" root))
+            (with-temp-file (expand-file-name "sub/target.adoc" root)
+              (insert "= Target\n\n[[anchor]] here.\n"))
+            (with-temp-file (expand-file-name "main.adoc" root)
+              (insert "= Main\n\nSee it.\n"))
+            (with-current-buffer (find-file-noselect (expand-file-name "main.adoc" root))
+              (let ((m (asciidoc--resolve-reference "sub/target.adoc#anchor")))
+                (expect (file-name-nondirectory (buffer-file-name (marker-buffer m)))
+                        :to-equal "target.adoc")
+                (with-current-buffer (marker-buffer m)
+                  (goto-char m)
+                  (expect (looking-at "\\[\\[anchor\\]\\]") :to-be-truthy)))))
+        (dolist (b (buffer-list))
+          (when (and (buffer-file-name b) (string-prefix-p root (buffer-file-name b)))
+            (kill-buffer b)))
+        (delete-directory root t)))))
+
 ;;; Filling
 
 (describe "Filling"

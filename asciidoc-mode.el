@@ -39,7 +39,8 @@
 ;;   attributes, admonitions, macros, and more
 ;; - Imenu support for section navigation
 ;; - Outline integration for folding
-;; - Cross-reference and link navigation (RET, mouse, C-c C-o, or xref)
+;; - Cross-reference and link navigation, including cross-file Antora and
+;;   relative xref targets (RET, mouse, C-c C-o, or xref)
 ;; - Comment support (// line comments)
 ;;
 ;; Quick start:
@@ -602,14 +603,23 @@ An attribute set to an empty value yields an empty string, not DEFAULT."
         (string-trim (match-string-no-properties 1))
       default)))
 
-(defun asciidoc--section-id (title)
+(defun asciidoc--id-prefix-separator ()
+  "Return a cons (PREFIX . SEPARATOR) for section id generation.
+Defaults come from the document's `idprefix'/`idseparator' attributes,
+falling back to the project conventions: Asciidoctor uses \"_\"/\"_\",
+Antora uses \"\"/\"-\" (so `Setup Steps' becomes `setup-steps')."
+  (let ((antora (asciidoc--antora-context)))
+    (cons (asciidoc--doc-attribute "idprefix" (if antora "" "_"))
+          (asciidoc--doc-attribute "idseparator" (if antora "-" "_")))))
+
+(defun asciidoc--section-id (title &optional prefix separator)
   "Return the auto-generated id AsciiDoc derives from section TITLE.
-Honors the document's `idprefix' (default \"_\") and `idseparator'
-\(default \"_\"): TITLE is downcased, every run of non-alphanumeric
-characters becomes the separator, leading and trailing separators are
-trimmed, and the prefix is prepended."
-  (let* ((prefix (asciidoc--doc-attribute "idprefix" "_"))
-         (sep (asciidoc--doc-attribute "idseparator" "_"))
+TITLE is downcased, every run of non-alphanumeric characters becomes the
+separator, leading and trailing separators are trimmed, and the prefix is
+prepended.  PREFIX and SEPARATOR default to `asciidoc--id-prefix-separator'."
+  (let* ((ps (unless (and prefix separator) (asciidoc--id-prefix-separator)))
+         (prefix (or prefix (car ps)))
+         (sep (or separator (cdr ps)))
          (body (replace-regexp-in-string "[^[:alnum:]]+" sep (downcase title))))
     (unless (string-empty-p sep)
       (let ((q (regexp-quote sep)))
@@ -634,15 +644,16 @@ Matches the inline forms `[[ID]]' and `[[ID,reftext]]' and the shorthand
   "Return the position of a section matching ID, or nil.
 ID matches a section by its auto-generated id or by its exact title text,
 the latter being a natural cross reference such as `<<My Section Title>>'."
-  (save-excursion
-    (goto-char (point-min))
-    (catch 'found
-      (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
-        (let ((title (match-string-no-properties 1)))
-          (when (or (equal title id)
-                    (equal (asciidoc--section-id title) id))
-            (throw 'found (match-beginning 0)))))
-      nil)))
+  (let ((ps (asciidoc--id-prefix-separator)))
+    (save-excursion
+      (goto-char (point-min))
+      (catch 'found
+        (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
+          (let ((title (match-string-no-properties 1)))
+            (when (or (equal title id)
+                      (equal (asciidoc--section-id title (car ps) (cdr ps)) id))
+              (throw 'found (match-beginning 0)))))
+        nil))))
 
 (defun asciidoc--anchor-position (id)
   "Return the buffer position of the anchor defining ID, or nil.
@@ -651,17 +662,102 @@ auto-generated id matches ID."
   (or (asciidoc--explicit-anchor-position id)
       (asciidoc--section-anchor-position id)))
 
-(defun asciidoc--goto-anchor (id)
-  "Move point to the anchor defining cross-reference ID.
-Signal a `user-error' when no matching anchor is found."
-  (let ((pos (asciidoc--anchor-position id)))
-    (unless pos
-      (user-error "No anchor found for cross-reference `%s'" id))
+;; Cross-file (multi-document) reference resolution.  An Antora page xref
+;; like `xref:basics/install.adoc#id[]' resolves its path against the
+;; module's `pages/' directory; a generic project resolves against the
+;; current file's directory.  Cross-component and versioned Antora targets
+;; are out of scope (they live in other repos).
+
+(defun asciidoc--antora-context ()
+  "Return Antora coordinates for the current buffer, or nil.
+The value is a plist (:root DIR :module NAME :component NAME) when the
+file lives under `…/modules/<module>/pages/' beside an `antora.yml'."
+  (when (and buffer-file-name
+             (string-match "\\(.*\\)/modules/\\([^/]+\\)/pages/"
+                           buffer-file-name))
+    (let* ((root (match-string 1 buffer-file-name))
+           (module (match-string 2 buffer-file-name))
+           (descriptor (expand-file-name "antora.yml" root)))
+      (when (file-exists-p descriptor)
+        (list :root root :module module
+              :component (asciidoc--antora-component descriptor))))))
+
+(defun asciidoc--antora-component (descriptor)
+  "Return the component name declared in the antora.yml at DESCRIPTOR, or nil."
+  (with-temp-buffer
+    (insert-file-contents descriptor)
+    (when (re-search-forward "^name:[ \t]*\\(.+?\\)[ \t]*$" nil t)
+      (match-string-no-properties 1))))
+
+(defun asciidoc--resolve-antora-path (path ctx)
+  "Resolve Antora page PATH to an absolute file using context CTX, or nil.
+PATH may carry `module:' or `component:module:' coordinates and an
+optional `version@' prefix.  Only the current component is resolved."
+  (let* ((path (replace-regexp-in-string "\\`[^@]*@" "" path)) ; drop version@
+         (parts (split-string path ":"))
+         (rest (car (last parts)))
+         (coords (butlast parts))
+         (component (and (= (length coords) 2) (nth 0 coords)))
+         (module (cond ((= (length coords) 2) (nth 1 coords))
+                       ((= (length coords) 1) (nth 0 coords))
+                       (t (plist-get ctx :module)))))
+    (when (or (null component) (equal component (plist-get ctx :component)))
+      (asciidoc--ensure-adoc
+       (expand-file-name (concat "modules/" module "/pages/" rest)
+                         (plist-get ctx :root))))))
+
+(defun asciidoc--ensure-adoc (file)
+  "Return FILE, appending `.adoc' when it has no extension."
+  (if (file-name-extension file) file (concat file ".adoc")))
+
+(defun asciidoc--resolve-file-target (path)
+  "Resolve a cross-document target PATH to an absolute file, or nil."
+  (let ((ctx (asciidoc--antora-context)))
+    (cond
+     (ctx (asciidoc--resolve-antora-path path ctx))
+     (buffer-file-name
+      (asciidoc--ensure-adoc
+       (expand-file-name path (file-name-directory buffer-file-name)))))))
+
+(defun asciidoc--reference-target-file (target)
+  "Return the document-path part of TARGET if it points to another file.
+TARGET points elsewhere when its path part ends in `.adoc' or contains a
+path separator or Antora coordinate; otherwise it is an in-buffer id."
+  (let ((path (car (split-string target "#"))))
+    (when (and (not (string-empty-p path))
+               (or (string-suffix-p ".adoc" path)
+                   (string-match-p "[/:]" path)))
+      path)))
+
+(defun asciidoc--resolve-reference (target)
+  "Resolve cross-reference TARGET to a marker, or nil.
+TARGET is an id, a natural title, or a cross-document `path#fragment'.
+Cross-document targets open the destination file."
+  (let ((file (asciidoc--reference-target-file target)))
+    (if (not file)
+        (when-let* ((pos (asciidoc--anchor-position target)))
+          (copy-marker pos))
+      (let ((abs (asciidoc--resolve-file-target file))
+            (fragment (cadr (split-string target "#"))))
+        (when (and abs (file-readable-p abs))
+          (with-current-buffer (find-file-noselect abs)
+            (copy-marker (or (and fragment (not (string-empty-p fragment))
+                                  (asciidoc--anchor-position fragment))
+                             (point-min)))))))))
+
+(defun asciidoc--goto-anchor (target)
+  "Follow cross-reference TARGET to its anchor, opening another file if needed.
+Signal a `user-error' when TARGET cannot be resolved."
+  (let ((marker (asciidoc--resolve-reference target)))
+    (unless marker
+      (user-error "Cannot resolve cross-reference `%s'" target))
     (push-mark)
     (xref-push-marker-stack)
-    (goto-char pos)
+    (unless (eq (marker-buffer marker) (current-buffer))
+      (pop-to-buffer-same-window (marker-buffer marker)))
+    (goto-char marker)
     (when (fboundp 'pulse-momentary-highlight-one-line)
-      (pulse-momentary-highlight-one-line pos))))
+      (pulse-momentary-highlight-one-line (point)))))
 
 (defun asciidoc-follow-reference-at-point (&optional event)
   "Follow the cross-reference or link at point.
@@ -736,10 +832,11 @@ and section titles (for natural cross references like `<<My Title>>')."
         (push (or (match-string-no-properties 1) (match-string-no-properties 2))
               ids))
       (goto-char (point-min))
-      (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
-        (let ((title (match-string-no-properties 1)))
-          (push (asciidoc--section-id title) ids)
-          (push title ids))))
+      (let ((ps (asciidoc--id-prefix-separator)))
+        (while (re-search-forward "^=+[ \t]+\\(.+?\\)[ \t]*$" nil t)
+          (let ((title (match-string-no-properties 1)))
+            (push (asciidoc--section-id title (car ps) (cdr ps)) ids)
+            (push title ids)))))
     (delete-dups (nreverse ids))))
 
 (defun asciidoc--xref-capf ()
@@ -768,9 +865,11 @@ reftext separator or closing `>')."
   (asciidoc--all-anchor-ids))
 
 (cl-defmethod xref-backend-definitions ((_backend (eql asciidoc)) id)
-  "Return the definition of ID as `xref' items for the `asciidoc' backend."
-  (when-let* ((pos (asciidoc--anchor-position id)))
-    (list (xref-make id (xref-make-buffer-location (current-buffer) pos)))))
+  "Return the definition of ID as `xref' items for the `asciidoc' backend.
+ID may be an in-buffer id/title or a cross-document `path#fragment'."
+  (when-let* ((marker (asciidoc--resolve-reference id)))
+    (list (xref-make id (xref-make-buffer-location
+                         (marker-buffer marker) (marker-position marker))))))
 
 ;;; Mode definition
 

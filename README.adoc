@@ -15,7 +15,7 @@ A tree-sitter-based major mode for editing https://asciidoc.org[AsciiDoc] files 
 * Section navigation (`C-M-a` / `C-M-e`) and sentence-level movement (`M-a` / `M-e`) across paragraphs and blocks
 * Imenu support for section navigation
 * Outline minor mode enabled by default -- heading navigation (`C-c C-n/p/f/b/u`) and folding
-* Cross-reference and link navigation -- follow `<<id>>`/`xref:` to their anchors (explicit ids, auto-generated section ids, or natural-title refs) and open URLs, via `RET`, mouse, `C-c C-o`, or `xref` (`M-.` / `M-,` with history); completion-at-point offers ids and titles while typing `<<`
+* Cross-reference and link navigation -- follow `<<id>>`/`xref:` to their anchors (explicit ids, auto-generated section ids, or natural-title refs), including cross-file `xref:` targets (Antora page IDs and relative paths), and open URLs, via `RET`, mouse, `C-c C-o`, or `xref` (`M-.` / `M-,` with history); completion-at-point offers ids and titles while typing `<<`
 * Comment support (`//` line comments)
 * Graceful degradation -- works as basic `text-mode` when grammars are unavailable
 
@@ -152,6 +152,19 @@ Clone the repository and add it to your `load-path`:
 == Usage
 
 Open any `.adoc` or `.asciidoc` file and `asciidoc-mode` activates automatically.
+
+== Antora
+
+https://antora.org[Antora] is the most common way to build AsciiDoc documentation these days, so `asciidoc-mode` understands its project layout. A buffer is treated as an Antora page when it lives under `modules/<module>/pages/` next to an `antora.yml` component descriptor.
+
+In an Antora project, cross-reference navigation follows Antora's page-id rules rather than plain file paths:
+
+* `xref:` targets resolve against the module's `pages/` directory, not the current file -- so `xref:basics/installation.adoc#usage[]` opens `modules/ROOT/pages/basics/installation.adoc` and jumps to the matching section from any page. A `module:` prefix (`xref:other:page.adoc[]`) is honored too.
+* Section ids are generated the way Antora does it (empty `idprefix`, `-` separator), so a `#getting-started` fragment finds the `== Getting Started` heading -- not the `_getting_started` form Asciidoctor uses standalone.
+
+Follow a reference the usual way (`RET`, mouse, `C-c C-o`, or `M-.`) and it opens the target file when needed.
+
+Cross-component (`component:`) and versioned (`version@`) targets are not resolved -- those live in separate repositories and are only knowable from a full Antora playbook, which is out of scope for an editor.
 
 == Design
 
