@@ -542,6 +542,75 @@
       (forward-sentence)
       (expect (looking-at "\nSecond") :to-be-truthy))))
 
+;;; Reference navigation
+
+(describe "Reference navigation"
+  :var (skip-reason)
+  (before-all
+    (unless asciidoc-test-grammars-available
+      (setq skip-reason "tree-sitter grammars not installed")))
+
+  (it "jumps from a cross-reference to its anchor"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "[[target]] The target.\n\nSee <<target>> now.\n"
+      (re-search-forward "<<t")
+      (backward-char)
+      (asciidoc-follow-reference-at-point)
+      (expect (looking-at "\\[\\[target\\]\\]") :to-be-truthy)))
+
+  (it "jumps from an xref macro to a shorthand anchor"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "[#sec] Section.\n\nSee xref:sec[the section].\n"
+      (re-search-forward "xref:s")
+      (backward-char)
+      (asciidoc-follow-reference-at-point)
+      (expect (looking-at "\\[#sec\\]") :to-be-truthy)))
+
+  (it "pushes the mark before jumping"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "[[target]] here.\n\nSee <<target>>.\n"
+      (re-search-forward "<<t")
+      (backward-char)
+      (let ((from (point)))
+        (asciidoc-follow-reference-at-point)
+        (expect (mark) :to-equal from))))
+
+  (it "opens a bare URL with browse-url"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (let (followed)
+      (cl-letf (((symbol-function 'browse-url)
+                 (lambda (url &rest _) (setq followed url))))
+        (with-fontified-asciidoc-buffer "Visit https://example.com today.\n"
+          (re-search-forward "https")
+          (backward-char)
+          (asciidoc-follow-reference-at-point)
+          (expect followed :to-equal "https://example.com")))))
+
+  (it "opens a link macro target with browse-url"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (let (followed)
+      (cl-letf (((symbol-function 'browse-url)
+                 (lambda (url &rest _) (setq followed url))))
+        (with-fontified-asciidoc-buffer "See link:https://example.com[the site].\n"
+          (re-search-forward "link:h")
+          (backward-char)
+          (asciidoc-follow-reference-at-point)
+          (expect followed :to-equal "https://example.com")))))
+
+  (it "errors when a cross-reference has no anchor"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "See <<missing>> here.\n"
+      (re-search-forward "<<m")
+      (backward-char)
+      (expect (asciidoc-follow-reference-at-point) :to-throw 'user-error)))
+
+  (it "marks reference text as clickable"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "[[target]] x\n\nSee <<target>> now.\n"
+      (let ((pos (+ (point-min) (string-match "<<target" (buffer-string)))))
+        (expect (get-text-property pos 'keymap)
+                :to-equal asciidoc-reference-map)))))
+
 ;;; Filling
 
 (describe "Filling"

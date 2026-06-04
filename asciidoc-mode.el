@@ -39,6 +39,7 @@
 ;;   attributes, admonitions, macros, and more
 ;; - Imenu support for section navigation
 ;; - Outline integration for folding
+;; - Clickable cross-references and links (RET, mouse, or C-c C-o)
 ;; - Comment support (// line comments)
 ;;
 ;; Quick start:
@@ -226,6 +227,30 @@ font-lock rule."
       (treesit-fontify-with-override beg fin face override)
       (put-text-property beg fin 'display (list 'raise raise)))))
 
+(defvar-keymap asciidoc-reference-map
+  :doc "Keymap active on the text of a navigable reference.
+Applied as a `keymap' text property by `asciidoc--fontify-reference'."
+  "RET" #'asciidoc-follow-reference-at-point
+  "<mouse-2>" #'asciidoc-follow-reference-at-point)
+
+(defun asciidoc--fontify-reference (node _override start end &rest _)
+  "Make the navigable reference NODE clickable.
+Adds the keymap, mouse highlight and tooltip; the link/cross-reference
+faces are applied by their own rules.  Non-navigable inline macros (e.g.
+`image:', `kbd:') are skipped.  START and END bound the fontified region."
+  (when (or (member (treesit-node-type node) '("xref" "autolink"))
+            (member (asciidoc--node-field node "macro_name")
+                    '("link" "mailto" "xref")))
+    (let ((beg (max start (treesit-node-start node)))
+          (fin (min end (treesit-node-end node))))
+      (when (< beg fin)
+        (add-text-properties
+         beg fin
+         (list 'keymap asciidoc-reference-map
+               'mouse-face 'highlight
+               'follow-link t
+               'help-echo "mouse-1/RET: follow reference"))))))
+
 (defvar asciidoc--font-lock-settings
   (treesit-font-lock-rules
    ;; Block-level rules (asciidoc parser)
@@ -324,13 +349,16 @@ font-lock rule."
    :language 'asciidoc-inline
    :feature 'inline-link
    '((autolink) @asciidoc-link-face
+     (autolink) @asciidoc--fontify-reference
      (xref) @asciidoc-cross-reference-face
+     (xref) @asciidoc--fontify-reference
      (uri_label) @asciidoc-link-face)
 
    :language 'asciidoc-inline
    :feature 'inline-macro
    '((inline_macro (macro_name) @font-lock-function-call-face)
      (inline_macro (target) @font-lock-string-face)
+     (inline_macro) @asciidoc--fontify-reference
      (stem_macro) @font-lock-function-call-face
      (footnote) @font-lock-doc-face)
 
@@ -551,6 +579,77 @@ Group 1 is the run of leading `=' markers.")
            (user-error "Already at the deepest heading level"))
           (t (save-excursion (goto-char (car bounds)) (insert "="))))))
 
+;;; Reference navigation
+
+(defun asciidoc--node-field (node type)
+  "Return the text of NODE's first named child of TYPE, or nil."
+  (when-let* ((child (car (treesit-filter-child
+                           node
+                           (lambda (c) (equal (treesit-node-type c) type))
+                           t))))
+    (treesit-node-text child t)))
+
+(defun asciidoc--anchor-position (id)
+  "Return the buffer position of the anchor defining ID, or nil.
+Only explicit anchors are matched: the inline forms `[[ID]]' and
+`[[ID,reftext]]', and the shorthand `[#ID]' (optionally with roles, as in
+`[#ID.role]').  Auto-generated section ids are not resolved yet."
+  (let ((q (regexp-quote id)))
+    (save-excursion
+      (goto-char (point-min))
+      ;; Match `[[id]]', `[[id,reftext]]' and the `[#id]' / `[#id.role]'
+      ;; shorthand.
+      (when (re-search-forward
+             (concat "\\[\\[" q "\\(?:,[^]]*\\)?\\]\\]"
+                     "\\|\\[#" q "[].]")
+             nil t)
+        (match-beginning 0)))))
+
+(defun asciidoc--goto-anchor (id)
+  "Move point to the anchor defining cross-reference ID.
+Signal a `user-error' when no matching anchor is found."
+  (let ((pos (asciidoc--anchor-position id)))
+    (unless pos
+      (user-error "No anchor found for cross-reference `%s'" id))
+    (push-mark)
+    (goto-char pos)
+    (when (fboundp 'pulse-momentary-highlight-one-line)
+      (pulse-momentary-highlight-one-line pos))))
+
+(defun asciidoc-follow-reference-at-point (&optional event)
+  "Follow the cross-reference or link at point.
+
+A cross-reference (`<<id>>' or `xref:id[]') jumps to its anchor and pushes
+the mark, so \\[set-mark-command] with a prefix returns.  A URL link, whether
+a bare URL or a `link:'/`mailto:' macro, is opened with `browse-url'.
+
+When called from a mouse EVENT, point is first moved to the click."
+  (interactive (list last-nonmenu-event))
+  (when (and event (mouse-event-p event))
+    (mouse-set-point event))
+  (let* ((leaf (treesit-node-at (point) 'asciidoc-inline))
+         (node (and leaf
+                    (treesit-parent-until
+                     leaf
+                     (lambda (n)
+                       (member (treesit-node-type n)
+                               '("xref" "autolink" "inline_macro")))
+                     t))))
+    (pcase (and node (treesit-node-type node))
+      ("xref"
+       (asciidoc--goto-anchor (asciidoc--node-field node "id")))
+      ("autolink"
+       (browse-url (treesit-node-text node t)))
+      ("inline_macro"
+       (let ((name (asciidoc--node-field node "macro_name"))
+             (target (asciidoc--node-field node "target")))
+         (pcase name
+           ("xref" (asciidoc--goto-anchor target))
+           ("link" (browse-url target))
+           ("mailto" (browse-url (concat "mailto:" target)))
+           (_ (user-error "Nothing to follow at point")))))
+      (_ (user-error "No reference at point")))))
+
 ;;; Mode definition
 
 ;;;###autoload
@@ -607,11 +706,13 @@ Install them with \\[asciidoc-install-grammars].
     (setq-local treesit-font-lock-settings asciidoc--font-lock-settings)
     (setq-local treesit-font-lock-feature-list
                 asciidoc--treesit-font-lock-feature-list)
-    ;; The super/subscript rules attach a `display' \='(raise ...) property;
-    ;; let font-lock clear it on refontification so an edited span does not
-    ;; leave its content permanently floating.
+    ;; Some inline rules attach non-face text properties: super/subscript add
+    ;; a `display' \='(raise ...), and references add a keymap/mouse affordance.
+    ;; Register them so font-lock clears them on refontification, e.g. when an
+    ;; edited span no longer needs them.
     (setq-local font-lock-extra-managed-props
-                (cons 'display font-lock-extra-managed-props))
+                (append '(display keymap mouse-face follow-link help-echo)
+                        font-lock-extra-managed-props))
 
     ;; Imenu
     (setq-local treesit-simple-imenu-settings
@@ -660,6 +761,7 @@ Install them with \\[asciidoc-install-grammars].
 (keymap-set asciidoc-mode-map "C-c C-f" #'outline-forward-same-level)
 (keymap-set asciidoc-mode-map "C-c C-b" #'outline-backward-same-level)
 (keymap-set asciidoc-mode-map "C-c C-u" #'outline-up-heading)
+(keymap-set asciidoc-mode-map "C-c C-o" #'asciidoc-follow-reference-at-point)
 
 ;;; Menu
 
@@ -668,6 +770,7 @@ Install them with \\[asciidoc-install-grammars].
   '("AsciiDoc"
     ("Navigation"
      ["Jump to Section..." imenu]
+     ["Follow Reference at Point" asciidoc-follow-reference-at-point]
      "---"
      ["Next Section" outline-next-visible-heading]
      ["Previous Section" outline-previous-visible-heading]
