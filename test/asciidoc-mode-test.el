@@ -142,6 +142,20 @@
         (expect (asciidoc-test-face-at (+ (point-min) pos))
                 :to-equal 'font-lock-string-face))))
 
+  (it "fontifies superscript text"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "E = mc^2^ today\n"
+      (let ((pos (string-match "2" "E = mc^2^ today")))
+        (expect (asciidoc-test-face-at (+ (point-min) pos))
+                :to-equal 'asciidoc-superscript-face))))
+
+  (it "fontifies subscript text"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "H~2~O is water\n"
+      (let ((pos (string-match "2" "H~2~O is water")))
+        (expect (asciidoc-test-face-at (+ (point-min) pos))
+                :to-equal 'asciidoc-subscript-face))))
+
   (it "fontifies autolinks"
     (assume asciidoc-test-grammars-available skip-reason)
     (with-fontified-asciidoc-buffer "Visit https://example.com for details.\n"

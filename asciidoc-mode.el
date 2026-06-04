@@ -183,6 +183,16 @@ Each entry has the form (LANG URL REVISION SOURCE-DIR CC C++).")
   "Face for anchor definitions (e.g. [[id]] and [#id])."
   :group 'asciidoc)
 
+(defface asciidoc-superscript-face
+  '((t :height 0.8))
+  "Face for superscript text (e.g. ^text^)."
+  :group 'asciidoc)
+
+(defface asciidoc-subscript-face
+  '((t :height 0.8))
+  "Face for subscript text (e.g. ~text~)."
+  :group 'asciidoc)
+
 ;;; Font-lock
 
 (defvar asciidoc--font-lock-settings
@@ -276,6 +286,8 @@ Each entry has the form (LANG URL REVISION SOURCE-DIR CC C++).")
      (ltalic) @italic
      (monospace) @font-lock-string-face
      (highlight) @font-lock-warning-face
+     (superscript) @asciidoc-superscript-face
+     (subscript) @asciidoc-subscript-face
      (passthrough) @font-lock-string-face)
 
    :language 'asciidoc-inline
