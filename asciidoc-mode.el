@@ -871,6 +871,30 @@ ID may be an in-buffer id/title or a cross-document `path#fragment'."
     (list (xref-make id (xref-make-buffer-location
                          (marker-buffer marker) (marker-position marker))))))
 
+;;; Flyspell
+
+(defconst asciidoc--no-spellcheck-node-types
+  '("autolink" "xref" "inline_macro" "id_assignment" "monospace" "passthrough")
+  "Inline node types whose text `flyspell-mode' should not spell-check.")
+
+(defun asciidoc--flyspell-verify ()
+  "Return non-nil if `flyspell-mode' should check the word ending at point.
+Skip words inside links, cross-references, anchors, macros, and inline
+code: URLs and ids are not prose, and on a navigable reference flyspell's
+own mouse keymap would otherwise shadow `asciidoc-follow-reference-at-point'."
+  (or (null (treesit-parser-list nil 'asciidoc-inline))
+      (let ((node (treesit-node-at (max (point-min) (1- (point)))
+                                   'asciidoc-inline)))
+        (not (and node
+                  (treesit-parent-until
+                   node
+                   (lambda (n)
+                     (member (treesit-node-type n)
+                             asciidoc--no-spellcheck-node-types))
+                   t))))))
+
+(put 'asciidoc-mode 'flyspell-mode-predicate #'asciidoc--flyspell-verify)
+
 ;;; Mode definition
 
 ;;;###autoload

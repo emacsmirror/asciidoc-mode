@@ -78,7 +78,7 @@ I named it `asciidoc-mode` instead of `adoc-ts-mode` because it shares nothing w
 | Yes
 
 | Flyspell integration
-| No
+| Yes
 | Yes
 
 | Compilation error support

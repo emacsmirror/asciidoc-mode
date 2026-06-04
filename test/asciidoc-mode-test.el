@@ -830,6 +830,46 @@
             (kill-buffer b)))
         (delete-directory root t)))))
 
+;;; Flyspell
+
+(describe "Flyspell integration"
+  :var (skip-reason)
+  (before-all
+    (unless asciidoc-test-grammars-available
+      (setq skip-reason "tree-sitter grammars not installed")))
+
+  (it "registers a flyspell verify predicate"
+    (expect (get 'asciidoc-mode 'flyspell-mode-predicate)
+            :to-equal 'asciidoc--flyspell-verify))
+
+  (it "checks words in ordinary prose"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "Some ordinary prose here.\n"
+      (goto-char (point-min))
+      (search-forward "prose")
+      (expect (asciidoc--flyspell-verify) :to-be-truthy)))
+
+  (it "skips words inside a link"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "See https://zzqqzz.example here.\n"
+      (goto-char (point-min))
+      (search-forward "zzqqzz")
+      (expect (asciidoc--flyspell-verify) :to-be nil)))
+
+  (it "skips words inside a cross-reference"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "See <<some-section>> now.\n"
+      (goto-char (point-min))
+      (search-forward "section")
+      (expect (asciidoc--flyspell-verify) :to-be nil)))
+
+  (it "skips words inside inline code"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer "Run `somefn` to start.\n"
+      (goto-char (point-min))
+      (search-forward "somefn")
+      (expect (asciidoc--flyspell-verify) :to-be nil))))
+
 ;;; Filling
 
 (describe "Filling"
