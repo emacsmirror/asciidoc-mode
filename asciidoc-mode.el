@@ -54,6 +54,7 @@
 (require 'outline)
 (require 'xref)
 (require 'cl-lib)
+(require 'flymake)
 
 ;;; Customization
 
@@ -1017,6 +1018,102 @@ own mouse keymap would otherwise shadow `asciidoc-follow-reference-at-point'."
 
 (put 'asciidoc-mode 'flyspell-mode-predicate #'asciidoc--flyspell-verify)
 
+;;; Flymake
+
+(defcustom asciidoc-asciidoctor-command "asciidoctor"
+  "Executable used by the Asciidoctor-backed Flymake checker."
+  :type 'string
+  :group 'asciidoc)
+
+(defcustom asciidoc-asciidoctor-extra-args nil
+  "Extra command-line arguments passed to Asciidoctor by the Flymake checker."
+  :type '(repeat string)
+  :group 'asciidoc)
+
+(defconst asciidoc--flymake-diagnostic-re
+  (concat "^asciidoctor: \\(ERROR\\|WARNING\\|DEPRECATED\\): "
+          "<stdin>: [Ll]ine \\([0-9]+\\): \\(.*\\)$")
+  "Regexp matching an Asciidoctor diagnostic about the document on stdin.
+Group 1 is the severity, group 2 the line number, group 3 the message.
+Asciidoctor has spelled it both `line' and `Line', hence the alternation.")
+
+(defvar-local asciidoc--flymake-proc nil
+  "The most recent Asciidoctor Flymake process for this buffer.")
+
+(defun asciidoc--flymake-parse-output (output source &optional exit-status)
+  "Parse Asciidoctor OUTPUT into Flymake diagnostics for buffer SOURCE.
+OUTPUT is the combined output of an Asciidoctor run over the buffer's
+contents.  When EXIT-STATUS is non-zero and no per-line diagnostics are
+found, the first message is reported as a buffer-level error so a fatal
+failure is not swallowed."
+  (let ((diags '())
+        (count 0))
+    (with-temp-buffer
+      (insert output)
+      (goto-char (point-min))
+      (while (re-search-forward asciidoc--flymake-diagnostic-re nil t)
+        (let* ((type (pcase (match-string 1)
+                       ("ERROR" :error)
+                       ("WARNING" :warning)
+                       (_ :note)))
+               (line (string-to-number (match-string 2)))
+               (msg (match-string 3))
+               (region (with-current-buffer source
+                         (flymake-diag-region source line))))
+          (when region
+            (setq count (1+ count))
+            (push (flymake-make-diagnostic source (car region) (cdr region)
+                                           type msg)
+                  diags))))
+      (when (and (zerop count) exit-status (not (zerop exit-status)))
+        (goto-char (point-min))
+        (when (re-search-forward "^asciidoctor: .+$" nil t)
+          (when-let* ((region (with-current-buffer source
+                                (flymake-diag-region source 1))))
+            (push (flymake-make-diagnostic source (car region) (cdr region)
+                                           :error (match-string 0))
+                  diags)))))
+    (nreverse diags)))
+
+(defun asciidoc-flymake (report-fn &rest _args)
+  "An AsciiDoc Flymake backend using Asciidoctor.
+Run the current buffer through `asciidoc-asciidoctor-command' and turn its
+parser diagnostics into Flymake reports via REPORT-FN.  Add this to
+`flymake-diagnostic-functions' (the mode does so automatically)."
+  (unless (executable-find asciidoc-asciidoctor-command)
+    (error "Cannot find the Asciidoctor executable %S"
+           asciidoc-asciidoctor-command))
+  (when (process-live-p asciidoc--flymake-proc)
+    (kill-process asciidoc--flymake-proc))
+  (let ((source (current-buffer))
+        (base (expand-file-name default-directory)))
+    (save-restriction
+      (widen)
+      (setq
+       asciidoc--flymake-proc
+       (make-process
+        :name "asciidoc-flymake" :noquery t :connection-type 'pipe
+        :buffer (generate-new-buffer " *asciidoc-flymake*")
+        :command (append (list asciidoc-asciidoctor-command)
+                         asciidoc-asciidoctor-extra-args
+                         (list "-B" base "-o" null-device "-"))
+        :sentinel
+        (lambda (proc _event)
+          (when (memq (process-status proc) '(exit signal))
+            (unwind-protect
+                (if (and (buffer-live-p source)
+                         (with-current-buffer source
+                           (eq proc asciidoc--flymake-proc)))
+                    (funcall report-fn
+                             (asciidoc--flymake-parse-output
+                              (with-current-buffer (process-buffer proc)
+                                (buffer-string))
+                              source (process-exit-status proc)))
+                  (flymake-log :warning "Canceling obsolete check %s" proc))
+              (kill-buffer (process-buffer proc)))))))
+      (process-send-region asciidoc--flymake-proc (point-min) (point-max))
+      (process-send-eof asciidoc--flymake-proc))))
+
 ;;; Mode definition
 
 ;;;###autoload
@@ -1034,6 +1131,11 @@ Install them with \\[asciidoc-install-grammars].
   ;; `//' in a URL like `https://...' mid-line and fills the paragraph with
   ;; a bogus `//' prefix.
   (setq-local comment-start-skip "^//+\\s-*")
+
+  ;; Asciidoctor-backed diagnostics, contributed only when the user turns on
+  ;; `flymake-mode'.  Independent of tree-sitter, so it works in the
+  ;; grammar-less fallback too.
+  (add-hook 'flymake-diagnostic-functions #'asciidoc-flymake nil t)
 
   (when (asciidoc--ensure-grammars)
     ;; Create both parsers over the full buffer.

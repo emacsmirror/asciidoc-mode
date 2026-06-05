@@ -928,6 +928,60 @@
       (search-forward "somefn")
       (expect (asciidoc--flyspell-verify) :to-be nil))))
 
+;;; Flymake
+
+(describe "Flymake (Asciidoctor)"
+  (it "parses per-line diagnostics into typed reports"
+    (with-temp-buffer
+      (insert "line one\nline two\nline three\n")
+      (let ((diags (asciidoc--flymake-parse-output
+                    (concat "asciidoctor: WARNING: <stdin>: line 2: invalid reference\n"
+                            "asciidoctor: ERROR: <stdin>: Line 3: missing include\n")
+                    (current-buffer) 0)))
+        (expect (length diags) :to-equal 2)
+        (expect (flymake-diagnostic-type (nth 0 diags)) :to-equal :warning)
+        (expect (flymake-diagnostic-type (nth 1 diags)) :to-equal :error))))
+
+  (it "surfaces a fatal failure with no locatable line as a buffer error"
+    (with-temp-buffer
+      (insert "= T\n\nbody\n")
+      (let ((diags (asciidoc--flymake-parse-output
+                    "asciidoctor: FAILED: missing converter for backend\n"
+                    (current-buffer) 1)))
+        (expect (length diags) :to-equal 1)
+        (expect (flymake-diagnostic-type (car diags)) :to-equal :error))))
+
+  (it "ignores unrelated output"
+    (with-temp-buffer
+      (insert "body\n")
+      (expect (asciidoc--flymake-parse-output "all good\n" (current-buffer) 0)
+              :to-be nil)))
+
+  (it "registers the backend in asciidoc-mode buffers"
+    (with-temp-buffer
+      (asciidoc-mode)
+      (expect (memq #'asciidoc-flymake flymake-diagnostic-functions)
+              :to-be-truthy)))
+
+  (it "reports an include error end to end"
+    (assume (executable-find asciidoc-asciidoctor-command)
+            "asciidoctor not installed")
+    (let ((buf (generate-new-buffer "fm-test.adoc")) result done)
+      (unwind-protect
+          (with-current-buffer buf
+            (setq buffer-file-name
+                  (expand-file-name "fm-test.adoc" temporary-file-directory))
+            (asciidoc-mode)
+            (insert "= T\n\ninclude::no-such-file-xyz.adoc[]\n")
+            (asciidoc-flymake (lambda (diags &rest _) (setq result diags done t)))
+            (let ((n 0))
+              (while (and (not done) (< n 100))
+                (accept-process-output nil 0.1)
+                (setq n (1+ n))))
+            (expect done :to-be-truthy)
+            (expect (> (length result) 0) :to-be-truthy))
+        (when (buffer-live-p buf) (kill-buffer buf))))))
+
 ;;; Filling
 
 (describe "Filling"
