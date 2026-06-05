@@ -355,7 +355,29 @@
       ;; The "a" cell-format spec on line 2 should get preprocessor face.
       (let ((pos (string-match "a| x" (buffer-string))))
         (expect (asciidoc-test-face-at (1+ pos))
-                :to-equal 'font-lock-preprocessor-face)))))
+                :to-equal 'font-lock-preprocessor-face))))
+
+  (it "fontifies the CSV table fence"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer ",===\nName,Age\n,===\n"
+      (expect (asciidoc-test-face-at 1) :to-equal 'font-lock-delimiter-face)))
+
+  (it "fontifies the DSV table fence"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer ":===\na:b:c\n:===\n"
+      (expect (asciidoc-test-face-at 1) :to-equal 'font-lock-delimiter-face)))
+
+  (it "fontifies inline markup inside a CSV cell"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer ",===\nName,*bold*\n,===\n"
+      (let ((pos (string-match "\\*bold" (buffer-string))))
+        (expect (asciidoc-test-face-at (+ (point-min) pos)) :to-equal 'bold))))
+
+  (it "fontifies inline markup inside a DSV cell"
+    (assume asciidoc-test-grammars-available skip-reason)
+    (with-fontified-asciidoc-buffer ":===\nTerm:_def_\n:===\n"
+      (let ((pos (string-match "_def" (buffer-string))))
+        (expect (asciidoc-test-face-at (+ (point-min) pos)) :to-equal 'italic)))))
 
 ;;; Font-lock: attributes
 

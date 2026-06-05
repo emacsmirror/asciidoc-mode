@@ -141,6 +141,20 @@ A comment block that should be ignored entirely.
 | two
 |===
 
+A CSV table:
+
+,===
+Name,Value
+alpha,one
+,===
+
+A DSV table:
+
+:===
+alpha:one
+beta:two
+:===
+
 == Macros
 
 See the https://example.com/page[documentation], a bare URL

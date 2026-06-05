@@ -336,6 +336,8 @@ faces are applied by their own rules.  Non-navigable inline macros (e.g.
    :override t
    :feature 'table
    '((table_block_marker) @font-lock-delimiter-face
+     (csv_table_block_marker) @font-lock-delimiter-face
+     (dsv_table_block_marker) @font-lock-delimiter-face
      (table_cell_attr) @font-lock-preprocessor-face)
 
    :language 'asciidoc
@@ -1167,7 +1169,9 @@ Install them with \\[asciidoc-install-grammars].
                    (checked_list_item (line) @cap)
                    (callout_list_item (line) @cap)
                    (quoted_block (line) @cap)
-                   (table_cell (table_cell_content) @cap))))
+                   (table_cell (table_cell_content) @cap)
+                   (csv_record (table_cell_content) @cap)
+                   (dsv_record (table_cell_content) @cap))))
     (setq-local treesit-language-at-point-function
                 (lambda (_pos) 'asciidoc))
 
